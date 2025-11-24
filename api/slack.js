@@ -19,7 +19,7 @@ const storage = {
   }
 };
 
-const ARR_GOAL = 2000000; // $2M goal
+const ARR_GOAL = 6000000; // $6M goal
 
 function getCurrentMonth() {
   const now = new Date();
