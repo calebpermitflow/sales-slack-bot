@@ -1,24 +1,13 @@
 // api/slack.js - Vercel Serverless Function
-// Ultra-lightweight Slack sales leaderboard with KV storage
+// Slack sales leaderboard with Upstash Redis permanent storage
+
+import { Redis } from '@upstash/redis';
 
 export const config = {
   runtime: 'edge',
 };
 
-// In-memory KV store (use Vercel KV for production)
-const storage = {
-  data: new Map(),
-  async get(key) {
-    return this.data.get(key) || null;
-  },
-  async set(key, value) {
-    this.data.set(key, value);
-  },
-  async keys(prefix = '') {
-    return Array.from(this.data.keys()).filter(k => k.startsWith(prefix));
-  }
-};
-
+const redis = Redis.fromEnv();
 const ARR_GOAL = 6000000; // $6M goal
 
 function getCurrentMonth() {
@@ -44,11 +33,7 @@ async function incrementPilot(name) {
   const month = getCurrentMonth();
   const key = `pilot:${month}:${name.toLowerCase()}`;
   
-  let count = await storage.get(key);
-  count = count ? parseInt(count) : 0;
-  count += 1;
-  
-  await storage.set(key, count.toString());
+  const count = await redis.incr(key);
   return count;
 }
 
@@ -65,20 +50,20 @@ async function addPilotTime(name, minutes) {
     month
   };
   
-  await storage.set(key, JSON.stringify(record));
+  await redis.set(key, JSON.stringify(record));
   
   // Check if it's an all-time record
   const allTimeKey = 'pilottime:alltime';
-  let allTimeRecord = await storage.get(allTimeKey);
+  const allTimeRecord = await redis.get(allTimeKey);
   
   if (allTimeRecord) {
-    allTimeRecord = JSON.parse(allTimeRecord);
-    if (record.minutes < allTimeRecord.minutes) {
-      await storage.set(allTimeKey, JSON.stringify(record));
+    const existing = typeof allTimeRecord === 'string' ? JSON.parse(allTimeRecord) : allTimeRecord;
+    if (record.minutes < existing.minutes) {
+      await redis.set(allTimeKey, JSON.stringify(record));
       return { record, isAllTime: true };
     }
   } else {
-    await storage.set(allTimeKey, JSON.stringify(record));
+    await redis.set(allTimeKey, JSON.stringify(record));
     return { record, isAllTime: true };
   }
   
@@ -97,7 +82,7 @@ async function addARR(name, amount) {
     date: new Date().toISOString()
   };
   
-  await storage.set(key, JSON.stringify(record));
+  await redis.set(key, JSON.stringify(record));
   
   // Calculate total ARR for the month
   const monthTotal = await getMonthlyARRTotal();
@@ -107,13 +92,13 @@ async function addARR(name, amount) {
 
 async function getMonthlyARRTotal() {
   const month = getCurrentMonth();
-  const keys = await storage.keys(`arr:${month}:`);
+  const keys = await redis.keys(`arr:${month}:*`);
   let total = 0;
   
   for (const key of keys) {
-    const data = await storage.get(key);
+    const data = await redis.get(key);
     if (data) {
-      const record = JSON.parse(data);
+      const record = typeof data === 'string' ? JSON.parse(data) : data;
       total += record.amount;
     }
   }
@@ -123,11 +108,11 @@ async function getMonthlyARRTotal() {
 
 async function getPilotLeaderboard() {
   const month = getCurrentMonth();
-  const keys = await storage.keys(`pilot:${month}:`);
+  const keys = await redis.keys(`pilot:${month}:*`);
   const leaderboard = [];
   
   for (const key of keys) {
-    const count = await storage.get(key);
+    const count = await redis.get(key);
     const name = key.split(':')[2];
     if (count && parseInt(count) > 0) {
       leaderboard.push({
@@ -142,13 +127,13 @@ async function getPilotLeaderboard() {
 
 async function getPilotTimeLeaderboard() {
   const month = getCurrentMonth();
-  const keys = await storage.keys(`pilottime:${month}:`);
+  const keys = await redis.keys(`pilottime:${month}:*`);
   const times = [];
   
   for (const key of keys) {
-    const data = await storage.get(key);
+    const data = await redis.get(key);
     if (data) {
-      const record = JSON.parse(data);
+      const record = typeof data === 'string' ? JSON.parse(data) : data;
       
       // Keep only the fastest time per rep
       const existing = times.find(t => t.name.toLowerCase() === record.name.toLowerCase());
@@ -167,9 +152,9 @@ async function getPilotTimeLeaderboard() {
   
   // Get all-time record
   const allTimeKey = 'pilottime:alltime';
-  let allTimeRecord = await storage.get(allTimeKey);
+  let allTimeRecord = await redis.get(allTimeKey);
   if (allTimeRecord) {
-    allTimeRecord = JSON.parse(allTimeRecord);
+    allTimeRecord = typeof allTimeRecord === 'string' ? JSON.parse(allTimeRecord) : allTimeRecord;
   }
   
   return { monthly: sorted, allTime: allTimeRecord };
@@ -177,13 +162,13 @@ async function getPilotTimeLeaderboard() {
 
 async function getARRLeaderboard() {
   const month = getCurrentMonth();
-  const keys = await storage.keys(`arr:${month}:`);
+  const keys = await redis.keys(`arr:${month}:*`);
   const grouped = {};
   
   for (const key of keys) {
-    const data = await storage.get(key);
+    const data = await redis.get(key);
     if (data) {
-      const record = JSON.parse(data);
+      const record = typeof data === 'string' ? JSON.parse(data) : data;
       const nameLower = record.name.toLowerCase();
       if (!grouped[nameLower]) {
         grouped[nameLower] = {
@@ -280,13 +265,13 @@ function getHelpText() {
     text: `*Sales Leaderboard Commands* 🏆
 
 *Record achievements:*
-\`/sales pilot <name>\` - Add +1 pilot
+\`/sales pilot <n>\` - Add +1 pilot
 Example: \`/sales pilot Matt\`
 
-\`/sales pilot-time <name> <minutes>\` - Record discovery→pilot time
+\`/sales pilot-time <n> <minutes>\` - Record discovery→pilot time
 Example: \`/sales pilot-time Sarah 24\`
 
-\`/sales arr <name> <amount>\` - Record ARR deal
+\`/sales arr <n> <amount>\` - Record ARR deal
 Example: \`/sales arr John 50000\`
 
 *View leaderboards:*
@@ -356,7 +341,7 @@ async function handleSlackCommand(text) {
     } else {
       return {
         response_type: "ephemeral",
-        text: "❌ Usage: `/sales pilot-time <name> <minutes>`"
+        text: "❌ Usage: `/sales pilot-time <n> <minutes>`"
       };
     }
   }
@@ -392,7 +377,7 @@ async function handleSlackCommand(text) {
     } else {
       return {
         response_type: "ephemeral",
-        text: "❌ Usage: `/sales arr <name> <amount>`"
+        text: "❌ Usage: `/sales arr <n> <amount>`"
       };
     }
   }
