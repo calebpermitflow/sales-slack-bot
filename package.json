@@ -3,31 +3,3 @@
     "@upstash/redis": "^1.28.0"
   }
 }
-```
-
-4. **Save it**
-   - Press Command + S
-   - Navigate to: Desktop → slack-sales-bot (the ROOT folder, NOT inside api)
-   - Save as: `package.json`
-   - **Uncheck** "If no extension is provided, use .txt"
-
-### Step 2: Upload to GitHub
-
-1. **Go to your GitHub repo:** https://github.com/your-username/slack-sales-bot
-2. **Click "Add file" → "Upload files"**
-3. **Drag the `package.json` file** from your Desktop/slack-sales-bot folder
-4. **Commit** (click green button at bottom)
-
-### Step 3: Wait for Redeploy
-
-Vercel will automatically redeploy. Check vercel.com/dashboard - it should now build successfully!
-
----
-
-Your folder structure should now be:
-```
-slack-sales-bot/
-├── api/
-│   └── slack.js
-├── package.json  ← NEW FILE
-└── vercel.json
